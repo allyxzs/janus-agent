@@ -1,0 +1,4 @@
+# O core do Janus utiliza apenas a biblioteca padrão do Python (zero dependências obrigatórias).
+# Dependências opcionais para desenvolvimento e testes:
+pytest>=8.0.0
+ruff>=0.4.0
