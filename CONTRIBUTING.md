@@ -5,7 +5,7 @@ Contribuições são muito bem-vindas! Este guia descreve como preparar seu ambi
 ## Setup local
 
 ```bash
-git clone https://github.com/SEU_USUARIO/janus-agent.git
+git clone https://github.com/allyxzs/janus-agent.git
 cd janus-agent
 python -m venv .venv
 source .venv/bin/activate  # No Windows: .venv\Scripts\activate

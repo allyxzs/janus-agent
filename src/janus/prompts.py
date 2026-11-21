@@ -3,29 +3,35 @@
 from __future__ import annotations
 
 import json
+
 from janus.models import Approach, Criterion, EvaluationResult, ProblemContext
 
-SYSTEM_PROMPT = """Você é Janus, um agente especialista em decisão estratégica e arquitetura de soluções.
-Assim como o deus romano de duas faces, você analisa simultaneamente o contexto/restrições atuais
-e os desdobramentos futuros de cada escolha.
+SYSTEM_PROMPT = """Você é Janus, um agente especialista em decisão estratégica e soluções.
+Assim como o deus romano de duas faces, você analisa simultaneamente o contexto e as restrições
+atuais junto aos desdobramentos futuros de cada escolha.
 
 Regras obrigatórias:
 1. Seja objetivo, analítico e concreto — evite generalidades vazias.
-2. Responda EXCLUSIVAMENTE em JSON válido, sem blocos de markdown ou texto extra fora do JSON.
+2. Responda EXCLUSIVAMENTE em JSON válido, sem blocos markdown ou texto extra fora do JSON.
 3. Escreva todo o conteúdo textual em português do Brasil, salvo termos técnicos consolidados.
 """
 
 
 def build_explore_prompt(ctx: ProblemContext) -> str:
-    constraints_text = "\n".join(f"- {c}" for c in ctx.constraints) or "- Nenhuma restrição explícita."
+    constraints_text = (
+        "\n".join(f"- {c}" for c in ctx.constraints)
+        or "- Nenhuma restrição explícita."
+    )
+    goal_text = ctx.goal or "Definir a melhor estratégia geral para resolver o problema."
     return f"""FASE 1 — EXPLORAÇÃO DE POSSIBILIDADES
 
 Problema: {ctx.problem}
-Objetivo: {ctx.goal or "Definir a melhor estratégia geral para resolver o problema."}
+Objetivo: {goal_text}
 Restrições:
 {constraints_text}
 
-Gere exatamente {ctx.num_approaches} abordagens REALMENTE DISTINTAS entre si (por exemplo: uma incremental/conservadora, uma equilibrada/pragmática e uma arrojada/estrutural).
+Gere exatamente {ctx.num_approaches} abordagens REALMENTE DISTINTAS entre si
+(por exemplo: conservadora/incremental, equilibrada/pragmática e arrojada/estrutural).
 
 Retorne um JSON exatamente neste formato:
 {{
@@ -69,10 +75,11 @@ def build_evaluate_prompt(
         }
         for a in approaches
     ]
+    goal_text = ctx.goal or "Resolver o problema com a melhor relação risco/retorno."
     return f"""FASE 2 — AVALIAÇÃO MULTICRITÉRIO E PRE-MORTEM
 
 Problema: {ctx.problem}
-Objetivo: {ctx.goal or "Resolver o problema com a melhor relação risco/retorno."}
+Objetivo: {goal_text}
 
 Critérios (dê notas de 0.0 a 10.0, onde 10.0 é excelente):
 {json.dumps(criteria_spec, ensure_ascii=False, indent=2)}
@@ -118,26 +125,30 @@ def build_decide_prompt(
         for ev in ranked
     ]
     winner = ranked[0]
+    winner_line = (
+        f"{winner.approach.name} "
+        f"(ID: {winner.approach.id}, Nota: {winner.weighted_score}/10)"
+    )
     return f"""FASE 3 — SÍNTESE E DEFINIÇÃO DA MELHOR ABORDAGEM
 
 Problema: {ctx.problem}
-Abordagem vencedora pelo motor de decisão: {winner.approach.name} (ID: {winner.approach.id}, Nota: {winner.weighted_score}/10)
+Abordagem vencedora pelo motor de decisão: {winner_line}
 
 Ranking completo:
 {json.dumps(summary, ensure_ascii=False, indent=2)}
 
-Explique por que a abordagem vencedora supera as demais, crie um plano de ação prático em 4 a 5 passos
-e defina um gatilho claro de contingência (quando pivotar para o plano B).
+Explique por que a abordagem vencedora supera as demais, crie um plano de ação prático
+em 4 a 5 passos e defina um gatilho claro de contingência (quando pivotar para o plano B).
 
 Retorne um JSON exatamente neste formato:
 {{
-  "decision_rationale": "Síntese direta explicando os trade-offs e por que esta é a melhor escolha.",
+  "decision_rationale": "Síntese direta explicando os trade-offs e a escolha final.",
   "action_plan": [
     "Passo 1 concreto",
     "Passo 2 concreto",
     "Passo 3 concreto",
     "Passo 4 concreto"
   ],
-  "fallback_trigger": "Condição mensurável que indica que devemos migrar para a segunda opção."
+  "fallback_trigger": "Condição mensurável que indica migração para a segunda opção."
 }}
 """

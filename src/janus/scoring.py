@@ -1,4 +1,4 @@
-"""Motor determinístico de pontuação multicritério e análise de margem."""
+"""Motor determinístico de pontuação multicritério, veto e sensibilidade."""
 
 from __future__ import annotations
 
@@ -84,3 +84,43 @@ def compute_confidence(ranked: list[EvaluationResult]) -> str:
     if margin >= 0.5:
         return "média"
     return "moderada (empate técnico — considere validação rápida)"
+
+
+def sensitivity_check(
+    ranked: list[EvaluationResult],
+    criteria: list[Criterion],
+) -> str:
+    """Verifica se a liderança muda ao reduzir em 20% o peso do critério dominante."""
+    if len(ranked) < 2 or not criteria:
+        return "Sem alternativas suficientes para teste de sensibilidade."
+
+    non_vetoed = [ev for ev in ranked if not ev.vetoed]
+    if len(non_vetoed) < 2:
+        return "Decisão robusta (apenas uma opção atendeu a todos os critérios mínimos)."
+
+    top_criterion = max(criteria, key=lambda c: c.weight)
+    adjusted = [
+        Criterion(
+            name=c.name,
+            label=c.label,
+            weight=c.weight * 0.8 if c.name == top_criterion.name else c.weight,
+            description=c.description,
+            min_acceptable=c.min_acceptable,
+        )
+        for c in criteria
+    ]
+    weights = normalize_weights(adjusted)
+
+    def _recalc(ev: EvaluationResult) -> float:
+        return sum(ev.scores.get(c.name, 5.0) * weights[c.name] for c in adjusted)
+
+    reordered = sorted(non_vetoed, key=_recalc, reverse=True)
+    if reordered[0].approach.id == non_vetoed[0].approach.id:
+        return (
+            f"Robusta: '{non_vetoed[0].approach.id}' mantém a liderança mesmo "
+            f"reduzindo o peso de {top_criterion.label} em 20%."
+        )
+    return (
+        f"Sensível a pesos: reduzir {top_criterion.label} em 20% passa a liderança "
+        f"para '{reordered[0].approach.id}' ({reordered[0].approach.name})."
+    )

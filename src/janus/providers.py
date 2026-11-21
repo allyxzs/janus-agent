@@ -5,9 +5,12 @@ from __future__ import annotations
 import abc
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Any
+
+RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504}
 
 
 class LLMProvider(abc.ABC):
@@ -32,13 +35,52 @@ def _extract_json(raw_text: str) -> dict[str, Any]:
         text = "\n".join(lines).strip()
 
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:
-            return json.loads(text[start : end + 1])
-        raise ValueError(f"Resposta do modelo não contém JSON válido: {raw_text[:200]}")
+            parsed = json.loads(text[start : end + 1])
+        else:
+            raise ValueError(f"Resposta do modelo não contém JSON válido: {raw_text[:200]}")
+
+    if not isinstance(parsed, dict):
+        raise ValueError("JSON retornado pelo modelo precisa ser um objeto raiz ({...}).")
+    return parsed
+
+
+def _post_json_with_retry(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    timeout: int,
+    max_retries: int,
+) -> dict[str, Any]:
+    """Envia POST JSON com retry automático em falhas transitórias de rede ou HTTP."""
+    data = json.dumps(payload).encode("utf-8")
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries + 1):
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            if exc.code in RETRYABLE_HTTP_CODES and attempt < max_retries:
+                time.sleep(0.5 * (2**attempt))
+                last_error = exc
+                continue
+            raise RuntimeError(f"Erro HTTP {exc.code} ao chamar {url}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            if attempt < max_retries:
+                time.sleep(0.5 * (2**attempt))
+                last_error = exc
+                continue
+            raise RuntimeError(f"Falha de conexão ao chamar {url}: {exc.reason}") from exc
+
+    raise RuntimeError(f"Falha após {max_retries + 1} tentativas em {url}.") from last_error
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -51,17 +93,21 @@ class OpenAICompatibleProvider(LLMProvider):
         base_url: str | None = None,
         temperature: float = 0.3,
         timeout: int = 60,
+        max_retries: int = 2,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self.model = model or os.getenv("JANUS_MODEL", "gpt-4o-mini")
-        self.base_url = (base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
+        default_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        self.base_url = (base_url or default_url).rstrip("/")
         self.temperature = temperature
         self.timeout = timeout
+        self.max_retries = max(0, max_retries)
         self.name = f"openai:{self.model}"
 
         if not self.api_key:
             raise ValueError(
-                "OPENAI_API_KEY não definida. Configure a variável de ambiente ou use --provider ollama/mock."
+                "OPENAI_API_KEY não definida. Configure a variável de ambiente "
+                "ou use --provider ollama/mock."
             )
 
     def complete_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
@@ -75,23 +121,17 @@ class OpenAICompatibleProvider(LLMProvider):
                 {"role": "user", "content": user_prompt},
             ],
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        body = _post_json_with_retry(
             url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            method="POST",
+            payload,
+            headers,
+            timeout=self.timeout,
+            max_retries=self.max_retries,
         )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Erro HTTP {exc.code} ao chamar {url}: {detail}") from exc
-
         content = body["choices"][0]["message"]["content"]
         return _extract_json(content)
 
@@ -105,11 +145,14 @@ class OllamaProvider(LLMProvider):
         base_url: str | None = None,
         temperature: float = 0.3,
         timeout: int = 120,
+        max_retries: int = 1,
     ) -> None:
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3.1")
-        self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
+        default_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.base_url = (base_url or default_url).rstrip("/")
         self.temperature = temperature
         self.timeout = timeout
+        self.max_retries = max(0, max_retries)
         self.name = f"ollama:{self.model}"
 
     def complete_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
@@ -124,22 +167,13 @@ class OllamaProvider(LLMProvider):
                 {"role": "user", "content": user_prompt},
             ],
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
+        body = _post_json_with_retry(
             url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+            payload,
+            {"Content-Type": "application/json"},
+            timeout=self.timeout,
+            max_retries=self.max_retries,
         )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.URLError as exc:
-            raise RuntimeError(
-                f"Não foi possível conectar ao Ollama em {self.base_url}. "
-                "Verifique se o servidor Ollama está em execução."
-            ) from exc
-
         content = body["message"]["content"]
         return _extract_json(content)
 
@@ -223,7 +257,7 @@ class MockProvider(LLMProvider):
                             "cost_efficiency": 8.5,
                         },
                         "rationales": {
-                            "impact": "Resolve sintomas prioritários, mas limita ganhos estruturais.",
+                            "impact": "Resolve sintomas prioritários com menor ganho estrutural.",
                             "feasibility": "Execução direta com recursos atuais.",
                             "risk_control": "Mudanças pequenas facilitam rollback.",
                             "speed": "Primeiras entregas na primeira semana.",

@@ -1,9 +1,14 @@
-"""Testes unitários do motor determinístico de pontuação e veto."""
+"""Testes unitários do motor determinístico de pontuação, veto e sensibilidade."""
 
 import unittest
 
-from janus.models import Approach, Criterion, EvaluationResult
-from janus.scoring import compute_confidence, normalize_weights, rank_evaluations
+from janus.models import Approach, Criterion, EvaluationResult, get_profile_criteria
+from janus.scoring import (
+    compute_confidence,
+    normalize_weights,
+    rank_evaluations,
+    sensitivity_check,
+)
 
 
 class TestScoring(unittest.TestCase):
@@ -41,6 +46,36 @@ class TestScoring(unittest.TestCase):
         self.assertEqual(ranked[1].approach.id, "A1")
         self.assertTrue(ranked[1].vetoed)
         self.assertEqual(compute_confidence(ranked), "alta")
+
+    def test_sensitivity_detects_robust_leader(self) -> None:
+        criteria = get_profile_criteria("balanced")
+        strong = EvaluationResult(
+            approach=Approach(id="A1", name="Forte", summary="", strategy_type="Equilibrada"),
+            scores={
+                "impact": 9.0,
+                "feasibility": 8.5,
+                "risk_control": 8.5,
+                "speed": 8.0,
+                "cost_efficiency": 8.0,
+            },
+            rationales={},
+            failure_modes=[],
+        )
+        weak = EvaluationResult(
+            approach=Approach(id="A2", name="Fraca", summary="", strategy_type="Conservadora"),
+            scores={
+                "impact": 6.0,
+                "feasibility": 6.5,
+                "risk_control": 6.0,
+                "speed": 6.0,
+                "cost_efficiency": 6.0,
+            },
+            rationales={},
+            failure_modes=[],
+        )
+        ranked = rank_evaluations([strong, weak], criteria)
+        note = sensitivity_check(ranked, criteria)
+        self.assertIn("Robusta", note)
 
 
 if __name__ == "__main__":

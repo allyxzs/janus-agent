@@ -1,7 +1,7 @@
 """Exemplo básico de uso do Janus via Python SDK."""
 
 from janus import JanusAgent, MockProvider
-from janus.cli import format_report_text
+from janus.formatters import format_report_text
 
 
 def main() -> None:
@@ -15,6 +15,7 @@ def main() -> None:
             "Equipe enxuta de 3 engenheiros",
             "Orçamento de nuvem não pode crescer mais que 20%",
         ],
+        profile="balanced",
     )
 
     print(format_report_text(report))

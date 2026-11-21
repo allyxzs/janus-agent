@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from janus.models import (
+    DEFAULT_CRITERIA,
     Approach,
     Criterion,
-    DEFAULT_CRITERIA,
     DecisionReport,
     EvaluationResult,
     ProblemContext,
+    get_profile_criteria,
 )
 from janus.prompts import (
     SYSTEM_PROMPT,
@@ -17,11 +20,21 @@ from janus.prompts import (
     build_explore_prompt,
 )
 from janus.providers import LLMProvider, MockProvider
-from janus.scoring import compute_confidence, rank_evaluations
+from janus.scoring import compute_confidence, rank_evaluations, sensitivity_check
+
+
+def _safe_float(value: Any, default: float = 5.0) -> float:
+    """Converte valores numéricos retornados pelo LLM de forma resiliente."""
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return float(str(value).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        return default
 
 
 class JanusAgent:
-    """Agente estratégico que explora possibilidades, avalia trade-offs e define a melhor abordagem."""
+    """Agente que explora possibilidades, avalia trade-offs e define a melhor abordagem."""
 
     def __init__(self, provider: LLMProvider | None = None) -> None:
         self.provider: LLMProvider = provider or MockProvider()
@@ -33,17 +46,25 @@ class JanusAgent:
         goal: str = "",
         constraints: list[str] | None = None,
         criteria: list[Criterion] | None = None,
+        profile: str | None = None,
         num_approaches: int = 3,
     ) -> DecisionReport:
         """Executa o pipeline completo do Janus para um problema informado."""
         if not problem or not problem.strip():
             raise ValueError("O campo 'problem' não pode estar vazio.")
 
+        if criteria is not None:
+            resolved_criteria = list(criteria)
+        elif profile is not None:
+            resolved_criteria = get_profile_criteria(profile)
+        else:
+            resolved_criteria = list(DEFAULT_CRITERIA)
+
         ctx = ProblemContext(
             problem=problem.strip(),
             goal=goal.strip(),
             constraints=list(constraints or []),
-            criteria=list(criteria or DEFAULT_CRITERIA),
+            criteria=resolved_criteria,
             num_approaches=max(2, min(num_approaches, 6)),
         )
 
@@ -53,8 +74,10 @@ class JanusAgent:
         # Fase 2: Convergência analítica (avaliação multicritério + pre-mortem)
         raw_evaluations = self._evaluate(ctx, approaches)
 
-        # Motor determinístico de pontuação e veto
+        # Motor determinístico de pontuação, veto e sensibilidade
         ranked = rank_evaluations(raw_evaluations, ctx.criteria)
+        confidence = compute_confidence(ranked)
+        sensitivity = sensitivity_check(ranked, ctx.criteria)
 
         # Fase 3: Síntese, plano de ação e gatilho de contingência
         synthesis = self._decide(ctx, ranked)
@@ -65,7 +88,9 @@ class JanusAgent:
             recommended=ranked[0],
             runner_up=ranked[1] if len(ranked) > 1 else None,
             all_evaluations=ranked,
-            confidence=compute_confidence(ranked),
+            criteria=ctx.criteria,
+            confidence=confidence,
+            sensitivity_note=sensitivity,
             decision_rationale=synthesis["decision_rationale"],
             action_plan=synthesis["action_plan"],
             fallback_trigger=synthesis["fallback_trigger"],
@@ -109,7 +134,7 @@ class JanusAgent:
         for approach in approaches:
             item = raw_map.get(approach.id, {})
             scores = {
-                str(k): float(v) for k, v in (item.get("scores") or {}).items()
+                str(k): _safe_float(v) for k, v in (item.get("scores") or {}).items()
             }
             rationales = {
                 str(k): str(v) for k, v in (item.get("rationales") or {}).items()
@@ -130,7 +155,7 @@ class JanusAgent:
         self,
         ctx: ProblemContext,
         ranked: list[EvaluationResult],
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         prompt = build_decide_prompt(ctx, ranked)
         data = self.provider.complete_json(SYSTEM_PROMPT, prompt)
         return {

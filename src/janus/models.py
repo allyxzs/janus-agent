@@ -1,4 +1,4 @@
-"""Modelos de dados estruturados do agente Janus."""
+"""Modelos de dados estruturados e perfis de decisão do agente Janus."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ class Criterion:
     Attributes:
         name: Identificador curto do critério (ex.: 'impact', 'feasibility').
         label: Nome legível para exibição em relatórios.
-        weight: Peso relativo do critério (será normalizado automaticamente).
+        weight: Peso relativo do critério (normalizado automaticamente).
         description: O que uma nota alta (10) significa neste critério.
         min_acceptable: Nota mínima (0-10) abaixo da qual a abordagem sofre veto.
     """
@@ -59,6 +59,123 @@ DEFAULT_CRITERIA: list[Criterion] = [
         description="Relação entre custo/esforço investido e retorno obtido.",
     ),
 ]
+
+
+PROFILES: dict[str, list[Criterion]] = {
+    "balanced": DEFAULT_CRITERIA,
+    "conservative": [
+        Criterion(
+            name="risk_control",
+            label="Controle de Risco",
+            weight=0.35,
+            description="Segurança, previsibilidade e reversão imediata.",
+            min_acceptable=6.5,
+        ),
+        Criterion(
+            name="feasibility",
+            label="Viabilidade",
+            weight=0.25,
+            description="Execução segura com o time e recursos atuais.",
+            min_acceptable=6.0,
+        ),
+        Criterion(
+            name="impact",
+            label="Impacto",
+            weight=0.20,
+            description="Ganho consistente sem expor a operação.",
+        ),
+        Criterion(
+            name="cost_efficiency",
+            label="Eficiência de Custo",
+            weight=0.10,
+            description="Baixo comprometimento financeiro inicial.",
+        ),
+        Criterion(
+            name="speed",
+            label="Velocidade",
+            weight=0.10,
+            description="Entregas incrementais previsíveis.",
+        ),
+    ],
+    "aggressive": [
+        Criterion(
+            name="impact",
+            label="Impacto",
+            weight=0.45,
+            description="Transformação estrutural e máximo retorno potencial.",
+        ),
+        Criterion(
+            name="speed",
+            label="Velocidade",
+            weight=0.25,
+            description="Velocidade para capturar vantagem competitiva.",
+        ),
+        Criterion(
+            name="feasibility",
+            label="Viabilidade",
+            weight=0.15,
+            description="Capacidade técnica de entregar sob ambição alta.",
+            min_acceptable=3.0,
+        ),
+        Criterion(
+            name="risk_control",
+            label="Controle de Risco",
+            weight=0.10,
+            description="Mitigação mínima para riscos críticos.",
+            min_acceptable=2.5,
+        ),
+        Criterion(
+            name="cost_efficiency",
+            label="Eficiência de Custo",
+            weight=0.05,
+            description="Uso racional de recursos.",
+        ),
+    ],
+    "frugal": [
+        Criterion(
+            name="cost_efficiency",
+            label="Eficiência de Custo",
+            weight=0.35,
+            description="Máximo retorno com mínimo gasto e infraestrutura.",
+            min_acceptable=6.0,
+        ),
+        Criterion(
+            name="feasibility",
+            label="Viabilidade",
+            weight=0.25,
+            description="Execução simples com equipe enxuta.",
+            min_acceptable=5.5,
+        ),
+        Criterion(
+            name="impact",
+            label="Impacto",
+            weight=0.20,
+            description="Resolução objetiva do problema principal.",
+        ),
+        Criterion(
+            name="speed",
+            label="Velocidade",
+            weight=0.10,
+            description="Tempo curto até o primeiro resultado.",
+        ),
+        Criterion(
+            name="risk_control",
+            label="Controle de Risco",
+            weight=0.10,
+            description="Prevenção de retrabalho caro.",
+            min_acceptable=4.0,
+        ),
+    ],
+}
+
+
+def get_profile_criteria(profile: str) -> list[Criterion]:
+    """Retorna uma cópia da lista de critérios de um perfil pré-configurado."""
+    key = profile.lower().strip()
+    if key not in PROFILES:
+        valid = ", ".join(sorted(PROFILES))
+        raise ValueError(f"Perfil desconhecido: '{profile}'. Perfis válidos: {valid}.")
+    return list(PROFILES[key])
 
 
 @dataclass
@@ -107,7 +224,9 @@ class DecisionReport:
     recommended: EvaluationResult
     runner_up: EvaluationResult | None
     all_evaluations: list[EvaluationResult]
+    criteria: list[Criterion]
     confidence: str
+    sensitivity_note: str
     decision_rationale: str
     action_plan: list[str]
     fallback_trigger: str

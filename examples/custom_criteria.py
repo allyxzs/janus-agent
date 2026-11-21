@@ -1,6 +1,7 @@
 """Exemplo de personalização de critérios, pesos e regras de veto."""
 
 from janus import Criterion, JanusAgent, MockProvider
+from janus.formatters import format_report_markdown
 
 
 def main() -> None:
@@ -32,9 +33,7 @@ def main() -> None:
         criteria=custom_criteria,
     )
 
-    print(f"Recomendação: {report.recommended.approach.name}")
-    print(f"Pontuação ponderada: {report.recommended.weighted_score}/10")
-    print(f"Confiança: {report.confidence}")
+    print(format_report_markdown(report))
 
 
 if __name__ == "__main__":
